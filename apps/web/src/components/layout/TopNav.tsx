@@ -28,23 +28,23 @@ export function TopNav() {
   const initials = user?.name?.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() || 'U'
 
   return (
-    <header className="h-14 border-b border-border bg-card flex items-center px-6 gap-6 flex-shrink-0 sticky top-0 z-50">
-      {/* Logo */}
-      <Link href="/dashboard" className="flex items-center gap-2.5 flex-shrink-0 mr-2">
+    <header className="h-14 border-b border-border bg-card flex items-center px-6 flex-shrink-0 sticky top-0 z-50 relative">
+      {/* Logo — esquerda */}
+      <Link href="/dashboard" className="flex items-center gap-2.5 flex-shrink-0">
         <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
           <span className="text-white font-black text-xs">M</span>
         </div>
         <span className="font-bold text-foreground text-sm tracking-tight">MeuAgendador</span>
       </Link>
 
-      {/* Nav items */}
-      <nav className="flex items-center gap-1 flex-1 overflow-x-auto no-scrollbar">
+      {/* Nav items — centro absoluto */}
+      <nav className="absolute left-1/2 -translate-x-1/2 flex items-center gap-0.5">
         {NAV_ITEMS.map(({ label, href, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(href + '/')
           return (
             <Link key={href} href={href}
               className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap flex-shrink-0',
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap',
                 active
                   ? 'text-foreground font-semibold'
                   : 'text-muted-foreground hover:text-foreground',
@@ -56,8 +56,8 @@ export function TopNav() {
         })}
       </nav>
 
-      {/* Right side */}
-      <div className="flex items-center gap-2 flex-shrink-0">
+      {/* Right side — direita */}
+      <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
         <button className="relative w-8 h-8 rounded-lg hover:bg-secondary flex items-center justify-center text-muted-foreground hover:text-foreground transition-all">
           <Bell className="w-4 h-4" />
         </button>
