@@ -1,5 +1,5 @@
 # Documentação n8n — MeuAgendador AI
-## Para: Giovanni (Sócio 2)
+## Para: Giovanni
 
 ---
 
@@ -664,5 +664,3 @@ Antes de colocar em produção, valide cada item:
 | WhatsApp não envia | Instância desconectada | Reconecte a instância na Evolution API |
 
 ---
-
-**Dúvidas? Fale com o Sócio 1 (dev).**
