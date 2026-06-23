@@ -30,8 +30,10 @@ export class AiService {
     @InjectRepository(AvailabilitySlot) private readonly slotRepo: Repository<AvailabilitySlot>,
     @InjectRepository(Appointment) private readonly appointmentRepo: Repository<Appointment>,
   ) {
-    this.openai = new OpenAI({ apiKey: config.get('OPENAI_API_KEY') })
-    this.anthropic = new Anthropic({ apiKey: config.get('ANTHROPIC_API_KEY') })
+    const openaiKey = config.get('OPENAI_API_KEY')
+    const anthropicKey = config.get('ANTHROPIC_API_KEY')
+    if (openaiKey) this.openai = new OpenAI({ apiKey: openaiKey })
+    if (anthropicKey) this.anthropic = new Anthropic({ apiKey: anthropicKey })
   }
 
   async getConfig(tenantId: string): Promise<AiConfig | null> {
