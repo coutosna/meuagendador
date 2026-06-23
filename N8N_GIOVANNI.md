@@ -36,6 +36,8 @@ Header: Authorization: Bearer eyJ...
 
 **Dica:** No n8n, salve o accessToken em uma variável de credencial e reutilize em todos os nodes HTTP Request.
 
+> ⚠️ **Atenção:** O token JWT expira. Configure um fluxo de renovação automática ou use um token de longa duração configurado no sistema.
+
 ---
 
 ## 2. WEBHOOKS QUE O SISTEMA ENVIA PARA O N8N
@@ -215,7 +217,7 @@ Dispara quando a IA não consegue resolver e pede intervenção humana.
 
 ## 3. ENDPOINTS DA API PARA O N8N CHAMAR
 
-### Base URL: `http://localhost:3001/api/v1`
+### Base URL: `https://api-production-d8a6.up.railway.app/api/v1`
 
 ---
 
@@ -448,7 +450,7 @@ No n8n, crie uma credencial "Header Auth":
 
 ### Passo 2 — Variáveis de ambiente
 ```
-API_BASE_URL = http://localhost:3001/api/v1
+API_BASE_URL = https://api-production-d8a6.up.railway.app/api/v1
 EVOLUTION_INSTANCE = nome-da-instancia-whatsapp
 ```
 
@@ -463,9 +465,16 @@ No n8n, valide o header `x-webhook-secret` para segurança.
 
 ### Passo 4 — Testar conexão
 ```
-GET http://localhost:3001/api/v1/dashboard/overview
+GET https://api-production-d8a6.up.railway.app/api/v1/dashboard/overview
 Authorization: Bearer {token}
 ```
+
+### Passo 5 — Redis (Upstash)
+O Redis usado é o **Upstash** com conexão TLS obrigatória. A URL deve usar `rediss://` (dois `s`):
+```
+REDIS_URL=rediss://default:SENHA@mint-boxer-152766.upstash.io:6379
+```
+> ⚠️ Se usar `redis://` (um `s`) a conexão vai falhar. Sempre use `rediss://` com Upstash.
 
 ---
 
@@ -495,7 +504,7 @@ Authorization: Bearer {token}
 ```json
 {
   "method": "POST",
-  "url": "={{ $env.API_BASE_URL }}/agenda/appointments",
+  "url": "=https://api-production-d8a6.up.railway.app/api/v1/agenda/appointments",
   "authentication": "predefinedCredentialType",
   "nodeCredentialType": "httpHeaderAuth",
   "body": {
