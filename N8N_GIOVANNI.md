@@ -16,36 +16,133 @@ WhatsApp → Evolution API → NestJS API → Bull Queue → Processadores
                          Suas automações no n8n
 ```
 
----
-
-## 1. AUTENTICAÇÃO NA API
-
-Todas as chamadas para a API precisam do token JWT no header.
-
-**Como obter o token:**
-```
-POST http://localhost:3001/api/v1/auth/login
-Body: { "email": "seu@email.com", "password": "suasenha" }
-Resposta: { "accessToken": "eyJ..." }
-```
-
-**Usar em todas as requisições:**
-```
-Header: Authorization: Bearer eyJ...
-```
-
-**Dica:** No n8n, salve o accessToken em uma variável de credencial e reutilize em todos os nodes HTTP Request.
-
-> ⚠️ **Atenção:** O token JWT expira. Configure um fluxo de renovação automática ou use um token de longa duração configurado no sistema.
+**URLs de produção:**
+- API: `https://api-production-d8a6.up.railway.app/api/v1`
+- Frontend: `https://meuagendador.vercel.app` (sua URL da Vercel)
 
 ---
 
-## 2. WEBHOOKS QUE O SISTEMA ENVIA PARA O N8N
+## PARTE 1 — CONFIGURAÇÃO INICIAL DO N8N
 
-Configure um **Webhook node** no n8n para receber cada evento.
-Endpoint de entrada: `POST http://localhost:3001/api/v1/webhooks/n8n`
+### 1.1 — Criar a Credencial da API
 
-O sistema envia para a URL configurada em `N8N_WEBHOOK_URL` no `.env`.
+Esta credencial será usada em todos os nodes HTTP Request para autenticar na API.
+
+**Passo a passo:**
+
+1. No n8n, clique em **Credentials** (menu lateral esquerdo)
+2. Clique em **Add Credential**
+3. Busque por **Header Auth** e selecione
+4. Preencha:
+   - **Name:** `MeuAgendador API`
+   - **Name (header):** `Authorization`
+   - **Value:** `Bearer SEU_TOKEN_AQUI`
+5. Clique em **Save**
+
+> ⚠️ Para obter o token, faça uma requisição de login (veja seção 1.2 abaixo) e cole o `accessToken` no campo Value, precedido de `Bearer `.
+
+---
+
+### 1.2 — Obter o Token JWT
+
+Antes de qualquer coisa, você precisa de um token de acesso.
+
+**No n8n, crie um workflow temporário:**
+
+1. Adicione o nó **HTTP Request**
+2. Configure:
+   - **Method:** `POST`
+   - **URL:** `https://api-production-d8a6.up.railway.app/api/v1/auth/login`
+   - **Body Content Type:** `JSON`
+   - **Body (JSON):**
+     ```json
+     {
+       "email": "seu@email.com",
+       "password": "suasenha"
+     }
+     ```
+3. Execute o nó → copie o valor de `accessToken` da resposta
+4. Cole esse valor na credencial criada no passo 1.1
+
+> ⚠️ **O token expira.** Para automação contínua, crie um sub-workflow que renova o token a cada 23h usando um nó **Schedule Trigger** + **HTTP Request** de login + **Set** para atualizar a variável global.
+
+---
+
+### 1.3 — Configurar Variáveis Globais
+
+1. No n8n, vá em **Settings → Variables**
+2. Crie as seguintes variáveis:
+
+| Nome | Valor |
+|------|-------|
+| `API_BASE_URL` | `https://api-production-d8a6.up.railway.app/api/v1` |
+| `EVOLUTION_INSTANCE` | `nome-da-sua-instancia-whatsapp` |
+| `WEBHOOK_SECRET` | `sua-chave-secreta-do-webhook` |
+
+**Como usar nos nodes:** `{{ $vars.API_BASE_URL }}`
+
+---
+
+### 1.4 — Testar a Conexão
+
+1. Crie um novo workflow
+2. Adicione um nó **HTTP Request**
+3. Configure:
+   - **Method:** `GET`
+   - **URL:** `https://api-production-d8a6.up.railway.app/api/v1/dashboard/overview`
+   - **Authentication:** `Predefined Credential Type`
+   - **Credential Type:** `Header Auth`
+   - **Credential:** `MeuAgendador API`
+4. Clique em **Execute Node**
+5. Se retornar dados de contacts, leads, appointments → está funcionando ✅
+
+---
+
+## PARTE 2 — RECEBENDO EVENTOS (WEBHOOKS DE ENTRADA)
+
+O MeuAgendador envia eventos para o n8n. Para cada fluxo, você precisa criar um **Webhook node** de entrada.
+
+### Como criar um Webhook de entrada no n8n:
+
+1. Crie um novo workflow
+2. Adicione o nó **Webhook** como trigger (primeiro nó)
+3. Configure:
+   - **HTTP Method:** `POST`
+   - **Path:** escolha um nome (ex: `meuagendador-eventos`)
+   - **Authentication:** `Header Auth`
+   - **Credential:** crie uma credencial Header Auth com:
+     - Header Name: `x-webhook-secret`
+     - Value: `sua-chave-secreta` (a mesma do `N8N_WEBHOOK_SECRET` no Railway)
+   - **Response Mode:** `Respond Immediately`
+   - **Response Code:** `200`
+4. Clique em **Listen for Test Event** para pegar a URL
+5. A URL gerada será algo como:
+   ```
+   https://seu-n8n.com/webhook/meuagendador-eventos
+   ```
+6. Passe essa URL para o Sócio 1 para configurar no Railway como `N8N_WEBHOOK_URL`
+
+> 💡 **Dica:** Use um único Webhook para todos os eventos e use um nó **Switch** logo depois para separar por tipo de evento (`message.received`, `appointment.created`, etc.)
+
+### Estrutura recomendada para receber todos os eventos:
+
+```
+[Webhook] → [Switch: campo "event"] → case "message.received"     → [seu fluxo A]
+                                    → case "lead.qualified"        → [seu fluxo B]
+                                    → case "appointment.created"   → [seu fluxo C]
+                                    → case "appointment.reminder"  → [seu fluxo D]
+                                    → case "conversation.handoff"  → [seu fluxo E]
+                                    → case "appointment.cancelled" → [seu fluxo F]
+```
+
+**Configuração do nó Switch:**
+- **Mode:** `Rules`
+- **Field:** `{{ $json.event }}`
+- Adicione uma regra por evento
+
+---
+
+## PARTE 3 — EVENTOS QUE O SISTEMA ENVIA
 
 ### Evento: `message.received`
 Dispara quando chega nova mensagem pelo WhatsApp.
@@ -76,8 +173,6 @@ Dispara quando chega nova mensagem pelo WhatsApp.
 }
 ```
 
-**Uso típico:** Notificar equipe no Slack/WhatsApp quando chega mensagem nova fora do horário.
-
 ---
 
 ### Evento: `lead.qualified`
@@ -107,8 +202,6 @@ Dispara quando a IA qualifica um lead automaticamente.
   }
 }
 ```
-
-**Uso típico:** Adicionar lead no seu CRM externo, notificar vendedor via WhatsApp pessoal.
 
 ---
 
@@ -143,13 +236,9 @@ Dispara quando agendamento é criado (pela IA ou manualmente).
 }
 ```
 
-**Uso típico:** Adicionar no Google Calendar, enviar confirmação customizada, criar evento no Zoom.
-
 ---
 
 ### Evento: `appointment.confirmed`
-Dispara quando agendamento é confirmado pelo cliente ou pelo atendente.
-
 ```json
 {
   "event": "appointment.confirmed",
@@ -177,8 +266,6 @@ Dispara 24h e 1h antes do agendamento (cronjob interno).
   }
 }
 ```
-
-**Uso típico:** Enviar lembrete customizado pelo WhatsApp com link de cancelamento.
 
 ---
 
@@ -211,281 +298,21 @@ Dispara quando a IA não consegue resolver e pede intervenção humana.
 }
 ```
 
-**Uso típico:** Alertar atendente via WhatsApp/Telegram que precisa assumir o chat.
-
 ---
 
-## 3. ENDPOINTS DA API PARA O N8N CHAMAR
+## PARTE 4 — ENDPOINTS DA API PARA CHAMAR
 
 ### Base URL: `https://api-production-d8a6.up.railway.app/api/v1`
 
----
-
-### 3.1 CONVERSAS
-
-**Listar conversas abertas:**
-```
-GET /conversations?status=open&limit=20
-```
-
-**Enviar mensagem para uma conversa:**
-```
-POST /whatsapp/instances/{instanceName}/send
-Body: {
-  "conversationId": "uuid",
-  "content": "Olá! Vi que você entrou em contato..."
-}
-```
-
-**Ativar/desativar bot em uma conversa:**
-```
-POST /conversations/{conversationId}/toggle-bot
-```
-
-**Marcar conversa como lida:**
-```
-POST /conversations/{conversationId}/read
-```
-
----
-
-### 3.2 CONTATOS
-
-**Criar/buscar contato:**
-```
-GET /contacts?search=5511999999999
-POST /contacts
-Body: { "name": "Maria Santos", "phone": "5511999999999", "source": "n8n" }
-```
-
-**Atualizar dados do contato:**
-```
-PATCH /contacts/{id}
-Body: { "tags": ["vip", "cirurgia"], "customFields": { "cpf": "123.456.789-00" } }
-```
-
----
-
-### 3.3 CRM — LEADS
-
-**Listar leads do pipeline:**
-```
-GET /crm/leads?pipelineId=uuid&stageId=uuid
-```
-
-**Criar lead manualmente (via tráfego pago, formulário, etc):**
-```
-POST /crm/leads
-Body: {
-  "title": "Lead - João da campanha Google",
-  "contactId": "uuid",
-  "value": 500.00,
-  "notes": "Veio do anúncio de cirurgia"
-}
-```
-
-**Mover lead de estágio:**
-```
-PATCH /crm/leads/{id}/stage
-Body: { "stageId": "uuid-estagio-agendado", "reason": "Agendamento confirmado via n8n" }
-```
-
----
-
-### 3.4 AGENDA — AGENDAMENTOS
-
-**Verificar horários disponíveis:**
-```
-GET /agenda/slots?date=2026-06-20&serviceId=uuid
-Resposta: { "date": "2026-06-20", "slots": ["09:00", "09:30", "10:00", "14:00"] }
-```
-
-**Criar agendamento (após qualificação no funil):**
-```
-POST /agenda/appointments
-Body: {
-  "contactId": "uuid",
-  "serviceId": "uuid",
-  "scheduledAt": "2026-06-20T10:00:00.000Z",
-  "notes": "Cliente veio via campanha Google"
-}
-```
-
-**Confirmar agendamento:**
-```
-POST /agenda/appointments/{id}/confirm
-```
-
-**Cancelar agendamento:**
-```
-POST /agenda/appointments/{id}/cancel
-```
-
----
-
-### 3.5 DASHBOARD (para relatórios automáticos)
-
-**Visão geral do dia:**
-```
-GET /dashboard/overview
-Resposta: {
-  "contacts": { "total": 142, "today": 5 },
-  "leads": { "total": 89, "qualified": 34, "won": 12, "conversionRate": 13 },
-  "appointments": { "today": 8, "month": 67 },
-  "conversations": { "total": 156, "open": 23 }
-}
-```
-
----
-
-## 4. FLUXOS PRONTOS PARA MONTAR NO N8N
-
----
-
-### FLUXO A — Lead do Tráfego Pago → Sistema
-
-**Trigger:** Webhook recebe lead de formulário Facebook/Google Ads
-
-```
-[Webhook] → [HTTP: POST /contacts] → [HTTP: POST /crm/leads] → [HTTP: POST /whatsapp/send]
-```
-
-**Passos:**
-1. Receber lead do formulário (nome, telefone, interesse)
-2. `POST /contacts` para criar contato
-3. `POST /crm/leads` para criar no CRM
-4. `POST /whatsapp/instances/{name}/send` para enviar mensagem de boas-vindas
-
----
-
-### FLUXO B — Notificação de Handoff (IA pediu ajuda humana)
-
-**Trigger:** Webhook `conversation.handoff`
-
-```
-[Webhook n8n] → [Switch: tenantId] → [WhatsApp pessoal do atendente] ou [Telegram]
-```
-
-**Mensagem para o atendente:**
-```
-🔔 *Atenção!* Um lead precisa de atendimento humano.
-
-👤 *Cliente:* {{contact.name}}
-📱 *Telefone:* {{contact.phone}}
-💬 *Última mensagem:* "{{lastMessage}}"
-
-Acesse: https://app.meuagendador.ai/conversations/{{conversation.id}}
-```
-
----
-
-### FLUXO C — Lembrete de Agendamento Personalizado
-
-**Trigger:** Webhook `appointment.reminder` (24h antes)
-
-```
-[Webhook] → [Format message] → [WhatsApp API via Evolution] → [Mark reminder sent]
-```
-
-**Mensagem para o cliente:**
-```
-Olá, {{contact.name}}! 👋
-
-Lembrando que você tem uma consulta amanhã:
-📅 *{{appointment.date}}* às *{{appointment.time}}*
-🏥 *{{service.name}}*
-
-Confirme sua presença respondendo *SIM* ou cancele respondendo *NÃO*.
-```
-
----
-
-### FLUXO D — Relatório Diário Automático
-
-**Trigger:** Cron `0 18 * * 1-5` (18h, dias úteis)
-
-```
-[Cron] → [HTTP: GET /dashboard/overview] → [HTTP: GET /reports/appointments] → [Format] → [WhatsApp/Email]
-```
-
-**Mensagem de resumo:**
-```
-📊 *Resumo do dia — {{date}}*
-
-👥 Leads hoje: {{contacts.today}}
-📅 Agendamentos: {{appointments.today}}
-💬 Conversas abertas: {{conversations.open}}
-✅ Taxa de conversão: {{leads.conversionRate}}%
-```
-
----
-
-### FLUXO E — Reativação de Leads Inativos
-
-**Trigger:** Cron `0 9 * * 1` (toda segunda-feira, 9h)
-
-```
-[Cron] → [HTTP: GET /conversations?status=open] → [Filter: lastMessageAt > 72h] → [WhatsApp reativação]
-```
-
-**Mensagem de reativação:**
-```
-Oii, {{contact.name}}! Tudo bem? 😊
-
-Vi que você entrou em contato conosco há alguns dias...
-Ainda posso te ajudar a {{service.name}}?
-
-Responda qualquer coisa que voltamos a conversar! 🚀
-```
-
----
-
-## 5. CONFIGURAÇÃO INICIAL NO N8N
-
-### Passo 1 — Credenciais
-No n8n, crie uma credencial "Header Auth":
-- Name: `MeuAgendador API`
-- Header Name: `Authorization`
-- Header Value: `Bearer {ACCESS_TOKEN_AQUI}`
-
-### Passo 2 — Variáveis de ambiente
-```
-API_BASE_URL = https://api-production-d8a6.up.railway.app/api/v1
-EVOLUTION_INSTANCE = nome-da-instancia-whatsapp
-```
-
-### Passo 3 — Webhook de entrada
-No `.env` da API, configure:
-```
-N8N_WEBHOOK_URL=http://seu-n8n.com/webhook/meuagendador
-N8N_WEBHOOK_SECRET=uma-senha-secreta-aqui
-```
-
-No n8n, valide o header `x-webhook-secret` para segurança.
-
-### Passo 4 — Testar conexão
-```
-GET https://api-production-d8a6.up.railway.app/api/v1/dashboard/overview
-Authorization: Bearer {token}
-```
-
-### Passo 5 — Redis (Upstash)
-O Redis usado é o **Upstash** com conexão TLS obrigatória. A URL deve usar `rediss://` (dois `s`):
-```
-REDIS_URL=rediss://default:SENHA@mint-boxer-152766.upstash.io:6379
-```
-> ⚠️ Se usar `redis://` (um `s`) a conexão vai falhar. Sempre use `rediss://` com Upstash.
-
----
-
-## 6. TABELA DE REFERÊNCIA RÁPIDA
-
 | O que fazer | Método | Endpoint |
-|-------------|--------|----------|
+|---|---|---|
 | Login / obter token | POST | `/auth/login` |
 | Ver conversas abertas | GET | `/conversations?status=open` |
-| Enviar mensagem | POST | `/whatsapp/instances/{name}/send` |
+| Enviar mensagem WhatsApp | POST | `/whatsapp/instances/{name}/send` |
+| Ativar/pausar bot | POST | `/conversations/{id}/toggle-bot` |
 | Criar contato | POST | `/contacts` |
+| Buscar contato | GET | `/contacts?search=5511999999999` |
+| Atualizar contato | PATCH | `/contacts/{id}` |
 | Criar lead no CRM | POST | `/crm/leads` |
 | Mover lead de estágio | PATCH | `/crm/leads/{id}/stage` |
 | Ver slots disponíveis | GET | `/agenda/slots?date=YYYY-MM-DD` |
@@ -494,27 +321,347 @@ REDIS_URL=rediss://default:SENHA@mint-boxer-152766.upstash.io:6379
 | Cancelar agendamento | POST | `/agenda/appointments/{id}/cancel` |
 | Relatório geral | GET | `/dashboard/overview` |
 | Relatório de leads | GET | `/reports/leads?from=&to=` |
-| Config da IA | GET/PUT | `/ai/config` |
 
 ---
 
-## 7. EXEMPLO COMPLETO — NODE HTTP REQUEST NO N8N
+## PARTE 5 — FLUXOS COMPLETOS PASSO A PASSO
 
-**Criar agendamento após lead qualificado:**
-```json
-{
-  "method": "POST",
-  "url": "=https://api-production-d8a6.up.railway.app/api/v1/agenda/appointments",
-  "authentication": "predefinedCredentialType",
-  "nodeCredentialType": "httpHeaderAuth",
-  "body": {
-    "contactId": "={{ $json.data.contact.id }}",
-    "serviceId": "={{ $json.data.serviceId }}",
-    "scheduledAt": "={{ $json.data.scheduledAt }}",
-    "notes": "Criado automaticamente via n8n"
+---
+
+### FLUXO A — Notificação de Handoff (IA pediu ajuda humana)
+
+**Objetivo:** Quando a IA não resolve, notificar o atendente via WhatsApp pessoal imediatamente.
+
+**Trigger:** Evento `conversation.handoff`
+
+**Nodes necessários:**
+1. `Webhook` → recebe o evento
+2. `Switch` → filtra `event === "conversation.handoff"`
+3. `Set` → formata a mensagem
+4. `HTTP Request` → envia WhatsApp para o atendente
+
+**Passo a passo:**
+
+**Node 1 — Webhook (Trigger)**
+- Type: `Webhook`
+- HTTP Method: `POST`
+- Path: `meuagendador-eventos`
+- Authentication: Header Auth (`x-webhook-secret`)
+
+**Node 2 — Switch**
+- Mode: `Rules`
+- Add Rule:
+  - Field: `{{ $json.event }}`
+  - Operation: `Equal`
+  - Value: `conversation.handoff`
+
+**Node 3 — Set (formatar mensagem)**
+- Mode: `Define below`
+- Add field:
+  - Name: `mensagem`
+  - Value:
+    ```
+    🔔 *Atenção! Cliente precisa de atendimento humano.*
+
+    👤 *Cliente:* {{ $json.data.contact.name }}
+    📱 *Telefone:* {{ $json.data.contact.phone }}
+    💬 *Última mensagem:* "{{ $json.data.lastMessage }}"
+
+    🔗 Acesse: https://meuagendador.vercel.app/conversations
+    ```
+
+**Node 4 — HTTP Request (enviar WhatsApp)**
+- Method: `POST`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/whatsapp/instances/{{ $vars.EVOLUTION_INSTANCE }}/send`
+- Authentication: `Predefined Credential Type` → `MeuAgendador API`
+- Body (JSON):
+  ```json
+  {
+    "phone": "5511999990000",
+    "content": "{{ $json.mensagem }}"
   }
-}
+  ```
+  > Substitua `5511999990000` pelo WhatsApp do atendente
+
+---
+
+### FLUXO B — Lembrete de Agendamento 24h antes
+
+**Objetivo:** Enviar mensagem personalizada para o cliente 24h antes do compromisso.
+
+**Trigger:** Evento `appointment.reminder` com `hoursUntil === 24`
+
+**Nodes necessários:**
+1. `Webhook` → recebe o evento
+2. `Switch` → filtra `event === "appointment.reminder"`
+3. `IF` → verifica se `hoursUntil === 24`
+4. `Code` → formata data/hora em português
+5. `HTTP Request` → envia WhatsApp para o cliente
+
+**Passo a passo:**
+
+**Node 1 — Webhook (Trigger)**
+- Mesmo webhook do Fluxo A (use o Switch central para rotear)
+
+**Node 2 — Switch**
+- Field: `{{ $json.event }}`
+- Value: `appointment.reminder`
+
+**Node 3 — IF (filtrar só 24h)**
+- Condition:
+  - Field: `{{ $json.data.hoursUntil }}`
+  - Operation: `Equal`
+  - Value: `24`
+
+**Node 4 — Code (formatar data)**
+- Language: `JavaScript`
+- Code:
+  ```javascript
+  const scheduledAt = new Date($input.first().json.data.appointment.scheduledAt);
+  const date = scheduledAt.toLocaleDateString('pt-BR', {
+    weekday: 'long', day: '2-digit', month: 'long'
+  });
+  const time = scheduledAt.toLocaleTimeString('pt-BR', {
+    hour: '2-digit', minute: '2-digit'
+  });
+
+  return [{
+    json: {
+      ...$input.first().json,
+      formattedDate: date,
+      formattedTime: time
+    }
+  }];
+  ```
+
+**Node 5 — HTTP Request (enviar WhatsApp)**
+- Method: `POST`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/whatsapp/instances/{{ $vars.EVOLUTION_INSTANCE }}/send`
+- Authentication: `MeuAgendador API`
+- Body (JSON):
+  ```json
+  {
+    "conversationId": "{{ $json.data.conversation.id }}",
+    "content": "Olá, {{ $json.data.contact.name }}! 👋\n\nLembrando que você tem um compromisso amanhã:\n\n📅 *{{ $json.formattedDate }}* às *{{ $json.formattedTime }}*\n✂️ *{{ $json.data.service.name }}*\n\nConfirme sua presença respondendo *SIM* ou cancele respondendo *NÃO*. 😊"
+  }
+  ```
+
+---
+
+### FLUXO C — Lead de Tráfego Pago → Sistema
+
+**Objetivo:** Receber lead de formulário Facebook/Google Ads, cadastrar no sistema e enviar boas-vindas.
+
+**Trigger:** Webhook do Facebook Lead Ads ou Google Ads
+
+**Nodes necessários:**
+1. `Webhook` (ou `Facebook Lead Ads Trigger`)
+2. `HTTP Request` → cria contato
+3. `HTTP Request` → cria lead no CRM
+4. `HTTP Request` → envia mensagem de boas-vindas
+
+**Passo a passo:**
+
+**Node 1 — Webhook (Trigger)**
+- Path: `lead-trafego-pago`
+- Método: `POST`
+
+**Node 2 — HTTP Request (criar contato)**
+- Method: `POST`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/contacts`
+- Authentication: `MeuAgendador API`
+- Body (JSON):
+  ```json
+  {
+    "name": "{{ $json.name }}",
+    "phone": "{{ $json.phone }}",
+    "email": "{{ $json.email }}",
+    "source": "trafego-pago",
+    "tags": ["lead-ads"]
+  }
+  ```
+- **Output:** salva `{{ $json.id }}` como `contactId`
+
+**Node 3 — HTTP Request (criar lead no CRM)**
+- Method: `POST`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/crm/leads`
+- Authentication: `MeuAgendador API`
+- Body (JSON):
+  ```json
+  {
+    "title": "Lead Ads - {{ $('Node 2').item.json.name }}",
+    "contactId": "{{ $('Node 2').item.json.id }}",
+    "value": 0,
+    "notes": "Veio de campanha: {{ $json.campaign_name }}"
+  }
+  ```
+
+**Node 4 — HTTP Request (enviar boas-vindas)**
+- Method: `POST`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/whatsapp/instances/{{ $vars.EVOLUTION_INSTANCE }}/send`
+- Authentication: `MeuAgendador API`
+- Body (JSON):
+  ```json
+  {
+    "phone": "{{ $('Node 2').item.json.phone }}",
+    "content": "Olá, {{ $('Node 2').item.json.name }}! 😊\n\nRecebemos seu contato e em breve um de nossos atendentes vai te chamar.\n\nEnquanto isso, pode nos contar mais sobre o que você precisa! 🚀"
+  }
+  ```
+
+---
+
+### FLUXO D — Relatório Diário Automático
+
+**Objetivo:** Enviar resumo do dia para o gestor todo dia às 18h.
+
+**Trigger:** Schedule (Cron)
+
+**Nodes necessários:**
+1. `Schedule Trigger` → 18h dias úteis
+2. `HTTP Request` → busca overview do dashboard
+3. `Code` → formata a mensagem
+4. `HTTP Request` → envia WhatsApp para o gestor
+
+**Passo a passo:**
+
+**Node 1 — Schedule Trigger**
+- Trigger Interval: `Cron`
+- Cron Expression: `0 18 * * 1-5`
+  _(segunda a sexta às 18h)_
+
+**Node 2 — HTTP Request (dados do dashboard)**
+- Method: `GET`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/dashboard/overview`
+- Authentication: `MeuAgendador API`
+
+**Node 3 — Code (formatar mensagem)**
+- Language: `JavaScript`
+- Code:
+  ```javascript
+  const data = $input.first().json;
+  const today = new Date().toLocaleDateString('pt-BR');
+
+  const msg = `📊 *Resumo do dia — ${today}*
+
+👥 Novos contatos hoje: ${data.contacts.today}
+📅 Agendamentos hoje: ${data.appointments.today}
+📆 Agendamentos no mês: ${data.appointments.month}
+💬 Conversas abertas: ${data.conversations.open}
+🎯 Leads qualificados: ${data.leads.qualified}
+✅ Taxa de conversão: ${data.leads.conversionRate}%`;
+
+  return [{ json: { mensagem: msg } }];
+  ```
+
+**Node 4 — HTTP Request (enviar WhatsApp)**
+- Method: `POST`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/whatsapp/instances/{{ $vars.EVOLUTION_INSTANCE }}/send`
+- Authentication: `MeuAgendador API`
+- Body (JSON):
+  ```json
+  {
+    "phone": "5511999990000",
+    "content": "{{ $json.mensagem }}"
+  }
+  ```
+  > Substitua pelo WhatsApp do gestor
+
+---
+
+### FLUXO E — Reativação de Leads Inativos
+
+**Objetivo:** Toda segunda-feira às 9h, reativar conversas sem resposta há mais de 72h.
+
+**Trigger:** Schedule (Cron)
+
+**Nodes necessários:**
+1. `Schedule Trigger` → toda segunda 9h
+2. `HTTP Request` → lista conversas abertas
+3. `Code` → filtra as inativas há +72h
+4. `Split In Batches` → itera por conversa
+5. `HTTP Request` → envia mensagem de reativação
+
+**Passo a passo:**
+
+**Node 1 — Schedule Trigger**
+- Cron Expression: `0 9 * * 1`
+  _(toda segunda-feira às 9h)_
+
+**Node 2 — HTTP Request (listar conversas)**
+- Method: `GET`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/conversations?status=open&limit=100`
+- Authentication: `MeuAgendador API`
+
+**Node 3 — Code (filtrar inativos)**
+- Language: `JavaScript`
+- Code:
+  ```javascript
+  const conversations = $input.first().json.data || [];
+  const cutoff = Date.now() - (72 * 60 * 60 * 1000); // 72h atrás
+
+  const inactive = conversations.filter(c => {
+    const lastMsg = new Date(c.lastMessageAt).getTime();
+    return lastMsg < cutoff;
+  });
+
+  return inactive.map(c => ({ json: c }));
+  ```
+
+**Node 4 — Split In Batches**
+- Batch Size: `1`
+- _(processa uma conversa por vez)_
+
+**Node 5 — HTTP Request (enviar reativação)**
+- Method: `POST`
+- URL: `https://api-production-d8a6.up.railway.app/api/v1/whatsapp/instances/{{ $vars.EVOLUTION_INSTANCE }}/send`
+- Authentication: `MeuAgendador API`
+- Body (JSON):
+  ```json
+  {
+    "conversationId": "{{ $json.id }}",
+    "content": "Oii, {{ $json.contact.name }}! Tudo bem? 😊\n\nVi que você entrou em contato conosco há alguns dias e queria saber se ainda posso te ajudar!\n\nResponda qualquer coisa que continuamos por aqui. 🚀"
+  }
+  ```
+
+---
+
+## PARTE 6 — CONFIGURAÇÃO DO REDIS (UPSTASH)
+
+O Redis usado é o **Upstash** com conexão TLS obrigatória. A URL deve usar `rediss://` (dois `s`):
+
 ```
+REDIS_URL=rediss://default:SENHA@mint-boxer-152766.upstash.io:6379
+```
+
+> ⚠️ Se usar `redis://` (um `s`) a conexão vai falhar. Sempre use `rediss://` com Upstash.
+
+---
+
+## PARTE 7 — CHECKLIST DE VALIDAÇÃO
+
+Antes de colocar em produção, valide cada item:
+
+- [ ] Credencial `MeuAgendador API` criada e testada
+- [ ] Variáveis globais configuradas (`API_BASE_URL`, `EVOLUTION_INSTANCE`)
+- [ ] Webhook de entrada ativo e URL passada para o Sócio 1
+- [ ] Fluxo A (Handoff) testado — enviou WhatsApp para o atendente
+- [ ] Fluxo B (Lembrete) testado — mensagem chegou formatada corretamente
+- [ ] Fluxo C (Lead Ads) testado — contato criado + lead no CRM + boas-vindas enviadas
+- [ ] Fluxo D (Relatório) testado — resumo chegou no WhatsApp do gestor
+- [ ] Fluxo E (Reativação) testado — mensagens enviadas para inativos
+
+---
+
+## PARTE 8 — TROUBLESHOOTING
+
+| Erro | Causa | Solução |
+|---|---|---|
+| `401 Unauthorized` | Token JWT expirado | Refaça o login e atualize a credencial |
+| `403 Forbidden` | Header `x-webhook-secret` errado | Verifique o valor do secret |
+| `404 Not Found` | URL ou ID errado | Verifique a URL e os IDs usados |
+| `500 Internal Server Error` | Erro na API | Verifique os logs no Railway |
+| Webhook não dispara | URL não configurada no Railway | Peça ao Sócio 1 para configurar `N8N_WEBHOOK_URL` |
+| WhatsApp não envia | Instância desconectada | Reconecte a instância na Evolution API |
 
 ---
 
